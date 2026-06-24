@@ -1,0 +1,16 @@
+{
+  "name": "poker-chip-counter",
+  "version": "1.0.0",
+  "description": "친구들과 포커할 때 칩만 실시간으로 추적하는 웹앱",
+  "main": "server.js",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "ws": "^8.18.0"
+  }
+}

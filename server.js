@@ -44,10 +44,14 @@ function currentTurnPlayerId(room) {
     const idx = (room.turnIndex + step) % n;
     const id = room.turnOrder[idx];
     const p = room.players.find(pp => pp.id === id);
-    if (p && !p.bankrupt) {
-      room.turnIndex = idx; // normalize so it always points at a real active player
-      return id;
+    if (!p || p.bankrupt) continue;
+    if (p.balance <= 0) {
+      // Broke but not bankrupt (e.g. went all-in or just paid the ante down
+      // to zero) — nothing to bet, so this turn auto-passes to the next player.
+      continue;
     }
+    room.turnIndex = idx; // normalize so it always points at a real active player
+    return id;
   }
   return null;
 }
@@ -99,11 +103,20 @@ function sendTo(ws, payload) {
   if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(payload));
 }
 
+// Charging the ante is the only place a player can become bankrupt:
+// if they can't afford the ante, they pay what they have and are marked
+// bankrupt (removed from the turn order). If they can afford it, they pay
+// in full and stay in — even if that leaves them at exactly 0 balance.
 function chargeAnte(room, player) {
-  const fee = Math.min(room.ante, player.balance);
-  player.balance -= fee;
-  room.pot += fee;
-  if (player.balance <= 0) player.bankrupt = true;
+  if (room.ante <= 0) return;
+  if (player.balance < room.ante) {
+    room.pot += player.balance;
+    player.balance = 0;
+    player.bankrupt = true;
+  } else {
+    player.balance -= room.ante;
+    room.pot += room.ante;
+  }
 }
 
 wss.on('connection', (ws) => {
@@ -262,14 +275,15 @@ wss.on('connection', (ws) => {
       }
       player.balance -= room.pendingBet;
       room.pot += room.pendingBet;
-      if (player.balance <= 0) player.bankrupt = true;
       room.pendingBet = 0;
       advanceTurn(room);
       broadcastState(roomCode);
       return;
     }
 
-    // ---- Host declares a winner: pot goes entirely to them, pot resets ----
+    // ---- Host declares a winner: pot goes entirely to them, pot resets,
+    //      then every still-active player is charged the ante for the next hand,
+    //      and the turn order starts again from the winner. ----
     if (msg.type === 'declare_winner') {
       if (!conn.isHost) {
         sendTo(ws, { type: 'error', message: '방장만 승자를 지정할 수 있어요.' });
@@ -281,6 +295,13 @@ wss.on('connection', (ws) => {
       room.pot = 0;
       room.pendingBet = 0;
       if (winner.balance > 0) winner.bankrupt = false;
+
+      // Collect next hand's ante from everyone who isn't bankrupt.
+      // This can newly bankrupt someone who can no longer afford it.
+      for (const p of room.players) {
+        if (!p.bankrupt) chargeAnte(room, p);
+      }
+
       setTurnToPlayer(room, winner.id);
       broadcastState(roomCode);
       return;

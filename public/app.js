@@ -99,7 +99,9 @@
           <button class="btn btn-gold" data-action="confirm" ${state.pendingBet <= 0 ? 'disabled' : ''}>베팅 확정</button>
         </div>`;
       } else if(isMe && !isTurn && !p.bankrupt){
-        controlsHtml = `<div class="pending-row"><span>내 차례를 기다리는 중...</span></div>`;
+        controlsHtml = p.balance <= 0
+          ? `<div class="pending-row"><span>베팅할 토큰이 없어 자동으로 차례가 넘어가요</span></div>`
+          : `<div class="pending-row"><span>내 차례를 기다리는 중...</span></div>`;
       }
 
       return `

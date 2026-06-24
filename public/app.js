@@ -1,15 +1,15 @@
 (function(){
-  let state = { buyIn: 0, pot: 0, players: [] };
+  let state = { buyIn: 0, ante: 0, pot: 0, pendingBet: 0, turnPlayerId: null, players: [] };
   let ws = null;
   let reconnectTimer = null;
   let reconnectDelay = 1000;
 
-  // Identity persisted in sessionStorage so a refresh doesn't lose "who am I"
   let myRoom = null;
   let myPlayerId = null;
   let myPlayerToken = null;
   let myHostToken = null;
   let amIHost = false;
+  let pendingAction = null;
 
   const $ = (id) => document.getElementById(id);
   const playerList = $('playerList');
@@ -19,6 +19,8 @@
   const syncDot = $('syncDot');
   const syncText = $('syncText');
   const hostPanel = $('hostPanel');
+  const turnBanner = $('turnBanner');
+  const turnBannerName = $('turnBannerName');
 
   function showToast(msg){
     toastEl.textContent = msg;
@@ -48,8 +50,20 @@
 
   function render(){
     potAmountEl.textContent = state.pot.toLocaleString();
-    buyinTag.textContent = '시작 토큰 ' + state.buyIn.toLocaleString();
+    buyinTag.textContent = `보유 ${state.buyIn.toLocaleString()} · 입장료 ${state.ante.toLocaleString()}`;
     hostPanel.style.display = amIHost ? 'block' : 'none';
+
+    const turnPlayer = state.players.find(p => p.id === state.turnPlayerId);
+    if(turnPlayer){
+      const isMyTurn = state.turnPlayerId === myPlayerId;
+      turnBanner.classList.toggle('me', isMyTurn);
+      turnBannerName.textContent = turnPlayer.name;
+      turnBannerName.classList.toggle('youtag', isMyTurn);
+    } else {
+      turnBanner.classList.remove('me');
+      turnBannerName.textContent = '대기 중';
+      turnBannerName.classList.remove('youtag');
+    }
 
     if(state.players.length === 0){
       playerList.innerHTML = `<div class="empty-state">플레이어를 기다리는 중...</div>`;
@@ -58,26 +72,51 @@
 
     playerList.innerHTML = state.players.map(p => {
       const isMe = p.id === myPlayerId;
-      const canBet = isMe && p.balance > 0;
+      const isTurn = p.id === state.turnPlayerId;
+      const cardClasses = [
+        'player-card',
+        isMe ? 'me' : '',
+        p.bankrupt ? 'bankrupt' : '',
+        isTurn ? 'its-turn' : '',
+      ].filter(Boolean).join(' ');
+
+      let controlsHtml = '';
+      if(isMe && isTurn && !p.bankrupt){
+        const avail = p.balance - state.pendingBet;
+        controlsHtml = `
+        <div class="pending-row">
+          <span>지금 베팅 중인 금액</span>
+          <span class="val">${state.pendingBet.toLocaleString()}</span>
+        </div>
+        <div class="bet-row">
+          <button class="bet-btn" data-action="stage" data-amt="100" ${avail < 100 ? 'disabled' : ''}>100</button>
+          <button class="bet-btn" data-action="stage" data-amt="500" ${avail < 500 ? 'disabled' : ''}>500</button>
+          <button class="bet-btn" data-action="stage" data-amt="1000" ${avail < 1000 ? 'disabled' : ''}>1000</button>
+          <button class="bet-btn allin" data-action="allin" ${avail <= 0 ? 'disabled' : ''}>올인</button>
+        </div>
+        <div class="confirm-row">
+          <button class="btn btn-ghost" data-action="reset" ${state.pendingBet <= 0 ? 'disabled' : ''}>초기화</button>
+          <button class="btn btn-gold" data-action="confirm" ${state.pendingBet <= 0 ? 'disabled' : ''}>베팅 확정</button>
+        </div>`;
+      } else if(isMe && !isTurn && !p.bankrupt){
+        controlsHtml = `<div class="pending-row"><span>내 차례를 기다리는 중...</span></div>`;
+      }
+
       return `
-      <div class="player-card ${isMe ? 'me' : ''} ${p.balance === 0 ? 'zero' : ''}" data-id="${p.id}">
+      <div class="${cardClasses}" data-id="${p.id}">
         <div class="player-top">
           <div class="player-id">
             <div class="chip-stack">${chipSVG(colorForBalance(p.balance, state.buyIn))}</div>
             <span class="player-name">${escapeHtml(p.name)}</span>
             ${isMe ? '<span class="me-tag">나</span>' : ''}
+            ${isTurn && !p.bankrupt ? '<span class="turn-tag">차례</span>' : ''}
+            ${p.bankrupt ? '<span class="bankrupt-tag">파산</span>' : ''}
           </div>
         </div>
         <div class="player-stack-row">
           <div class="stack-amount display">${p.balance.toLocaleString()}</div>
         </div>
-        ${isMe ? `
-        <div class="bet-row">
-          <button class="bet-btn" data-action="bet" data-amt="100" ${p.balance < 100 ? 'disabled' : ''}>100</button>
-          <button class="bet-btn" data-action="bet" data-amt="500" ${p.balance < 500 ? 'disabled' : ''}>500</button>
-          <button class="bet-btn" data-action="bet" data-amt="1000" ${p.balance < 1000 ? 'disabled' : ''}>1000</button>
-          <button class="bet-btn allin" data-action="allin" ${p.balance <= 0 ? 'disabled' : ''}>올인</button>
-        </div>` : ''}
+        ${controlsHtml}
       </div>`;
     }).join('');
   }
@@ -98,7 +137,6 @@
     ws.onopen = () => {
       reconnectDelay = 1000;
       if(myRoom && myPlayerId && myPlayerToken){
-        // Reconnecting with existing identity (e.g. after a refresh)
         ws.send(JSON.stringify({
           type: 'rejoin', room: myRoom, playerId: myPlayerId,
           playerToken: myPlayerToken, hostToken: myHostToken || undefined
@@ -147,8 +185,6 @@
     };
   }
 
-  let pendingAction = null;
-
   function send(payload){
     if(ws && ws.readyState === WebSocket.OPEN){
       ws.send(JSON.stringify(payload));
@@ -157,7 +193,7 @@
     }
   }
 
-  // ===== Identity persistence (sessionStorage: survives refresh, not new device) =====
+  // ===== Identity persistence =====
   function persistIdentity(){
     try{
       sessionStorage.setItem('tokenCounter_identity', JSON.stringify({
@@ -178,10 +214,15 @@
   }
 
   // ===== Actions =====
-  function placeBet(amount, allIn){
-    send({ type: 'bet', amount, allIn: !!allIn });
+  function stageBet(amount, allIn){
+    send({ type: 'stage_bet', amount, allIn: !!allIn });
   }
-
+  function resetPending(){
+    send({ type: 'reset_pending' });
+  }
+  function confirmBet(){
+    send({ type: 'confirm_bet' });
+  }
   function declareWinner(winnerId){
     send({ type: 'declare_winner', winnerId });
   }
@@ -193,10 +234,10 @@
     overlay.innerHTML = `
       <div class="modal">
         <h2>승자 지정</h2>
-        <div class="sub">현재 팟 ${state.pot.toLocaleString()} 전액이 선택한 플레이어에게 지급돼요</div>
+        <div class="sub">현재 팟 ${state.pot.toLocaleString()} 전액이 선택한 플레이어에게 지급되고, 다음 판은 그 사람부터 시작해요</div>
         ${state.players.map(p => `
           <div class="winner-option" data-id="${p.id}">
-            <span>${escapeHtml(p.name)}</span>
+            <span>${escapeHtml(p.name)}${p.bankrupt ? ' (파산)' : ''}</span>
             <span class="bal">${p.balance.toLocaleString()}</span>
           </div>
         `).join('')}
@@ -219,10 +260,14 @@
     const btn = e.target.closest('[data-action]');
     if(!btn || btn.disabled) return;
     const action = btn.dataset.action;
-    if(action === 'bet'){
-      placeBet(parseInt(btn.dataset.amt, 10), false);
+    if(action === 'stage'){
+      stageBet(parseInt(btn.dataset.amt, 10), false);
     } else if(action === 'allin'){
-      placeBet(null, true);
+      stageBet(null, true);
+    } else if(action === 'reset'){
+      resetPending();
+    } else if(action === 'confirm'){
+      confirmBet();
     }
   });
 
@@ -263,9 +308,13 @@
   $('createBtn').onclick = () => {
     const name = $('hostNameInput').value.trim();
     const buyIn = parseInt($('buyInInput').value, 10);
+    const anteRaw = $('anteInput').value.trim();
+    const ante = anteRaw === '' ? 0 : parseInt(anteRaw, 10);
     if(!name){ showToast('이름을 입력해주세요'); return; }
-    if(isNaN(buyIn) || buyIn <= 0){ showToast('시작 토큰 금액을 입력해주세요'); return; }
-    pendingAction = { type: 'create_room', name, buyIn };
+    if(isNaN(buyIn) || buyIn <= 0){ showToast('보유 금액을 입력해주세요'); return; }
+    if(isNaN(ante) || ante < 0){ showToast('입장료를 올바르게 입력해주세요'); return; }
+    if(ante > buyIn){ showToast('입장료가 보유 금액보다 클 수 없어요'); return; }
+    pendingAction = { type: 'create_room', name, buyIn, ante };
     if(ws && ws.readyState === WebSocket.OPEN){ send(pendingAction); } else { connect(); }
   };
 
@@ -278,7 +327,6 @@
     if(ws && ws.readyState === WebSocket.OPEN){ send(pendingAction); } else { connect(); }
   };
 
-  // Auto-fill room code from URL (?room=XXXX) and switch to join tab
   (function prefillFromUrl(){
     const params = new URLSearchParams(window.location.search);
     const room = params.get('room');
@@ -288,7 +336,6 @@
     }
   })();
 
-  // Resume existing session if we have one (e.g. refresh mid-game)
   if(loadIdentity()){
     connect();
   }

@@ -1,7 +1,7 @@
 {
-  "name": "poker-chip-counter",
+  "name": "poker-token-counter",
   "version": "1.0.0",
-  "description": "친구들과 포커할 때 칩만 실시간으로 추적하는 웹앱",
+  "description": "친구들과 포커할 때 토큰만 실시간으로 추적하는 웹앱 (방장/플레이어 권한 분리)",
   "main": "server.js",
   "engines": {
     "node": ">=18.0.0"

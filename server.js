@@ -37,6 +37,13 @@ function genCode() {
 function genToken() { return crypto.randomBytes(16).toString('hex'); }
 function genId() { return 'p_' + crypto.randomBytes(6).toString('hex'); }
 
+// A player can take a turn if they exist, haven't gone bankrupt, haven't
+// folded this hand, and actually have something to bet (otherwise their
+// turn auto-passes).
+function canTakeTurn(player) {
+  return !!player && !player.bankrupt && !player.folded && player.balance > 0;
+}
+
 function currentTurnPlayerId(room) {
   const n = room.turnOrder.length;
   if (n === 0) return null;
@@ -44,12 +51,7 @@ function currentTurnPlayerId(room) {
     const idx = (room.turnIndex + step) % n;
     const id = room.turnOrder[idx];
     const p = room.players.find(pp => pp.id === id);
-    if (!p || p.bankrupt) continue;
-    if (p.balance <= 0) {
-      // Broke but not bankrupt (e.g. went all-in or just paid the ante down
-      // to zero) — nothing to bet, so this turn auto-passes to the next player.
-      continue;
-    }
+    if (!canTakeTurn(p)) continue;
     room.turnIndex = idx; // normalize so it always points at a real active player
     return id;
   }
@@ -63,7 +65,7 @@ function advanceTurn(room) {
     const idx = (room.turnIndex + step) % n;
     const id = room.turnOrder[idx];
     const p = room.players.find(pp => pp.id === id);
-    if (p && !p.bankrupt) {
+    if (canTakeTurn(p)) {
       room.turnIndex = idx;
       return;
     }
@@ -85,7 +87,7 @@ function publicState(room) {
     pendingBet: room.pendingBet,
     turnPlayerId: turnId,
     players: room.players.map(p => ({
-      id: p.id, name: p.name, balance: p.balance, bankrupt: !!p.bankrupt,
+      id: p.id, name: p.name, balance: p.balance, bankrupt: !!p.bankrupt, folded: !!p.folded,
     })),
   };
 }
@@ -136,7 +138,7 @@ wss.on('connection', (ws) => {
 
       const hostToken = genToken();
       const hostId = genId();
-      const hostPlayer = { id: hostId, name: hostName, balance: buyIn, token: genToken(), bankrupt: false };
+      const hostPlayer = { id: hostId, name: hostName, balance: buyIn, token: genToken(), bankrupt: false, folded: false };
 
       rooms[code] = {
         buyIn,
@@ -178,7 +180,7 @@ wss.on('connection', (ws) => {
       const name = (msg.name || '플레이어').toString().slice(0, 20).trim() || '플레이어';
       const id = genId();
       const token = genToken();
-      const player = { id, name, balance: room.buyIn, token, bankrupt: false };
+      const player = { id, name, balance: room.buyIn, token, bankrupt: false, folded: false };
       room.players.push(player);
       room.turnOrder.push(id);
       chargeAnte(room, player);
@@ -281,9 +283,44 @@ wss.on('connection', (ws) => {
       return;
     }
 
+    // ---- Check: pass the turn with no bet at all ----
+    if (msg.type === 'check') {
+      const turnId = currentTurnPlayerId(room);
+      if (turnId !== conn.playerId) {
+        sendTo(ws, { type: 'error', message: '지금은 당신의 차례가 아니에요.' });
+        return;
+      }
+      if (room.pendingBet > 0) {
+        sendTo(ws, { type: 'error', message: '베팅 중인 금액이 있어요. 초기화 후 체크해주세요.' });
+        return;
+      }
+      advanceTurn(room);
+      broadcastState(roomCode);
+      return;
+    }
+
+    // ---- Fold: leave this hand. Already-confirmed bets stay in the pot;
+    //      the player is skipped for the rest of this hand's turns and
+    //      can't be chosen as the winner until they un-fold next hand. ----
+    if (msg.type === 'fold') {
+      const player = room.players.find(p => p.id === conn.playerId);
+      if (!player) return;
+      const turnId = currentTurnPlayerId(room);
+      if (turnId !== conn.playerId) {
+        sendTo(ws, { type: 'error', message: '지금은 당신의 차례가 아니에요.' });
+        return;
+      }
+      room.pendingBet = 0;
+      player.folded = true;
+      advanceTurn(room);
+      broadcastState(roomCode);
+      return;
+    }
+
     // ---- Host declares a winner: pot goes entirely to them, pot resets,
     //      then every still-active player is charged the ante for the next hand,
-    //      and the turn order starts again from the winner. ----
+    //      fold status clears for the new hand, and the turn order starts
+    //      again from the winner. ----
     if (msg.type === 'declare_winner') {
       if (!conn.isHost) {
         sendTo(ws, { type: 'error', message: '방장만 승자를 지정할 수 있어요.' });
@@ -291,14 +328,20 @@ wss.on('connection', (ws) => {
       }
       const winner = room.players.find(p => p.id === msg.winnerId);
       if (!winner) return;
+      if (winner.folded) {
+        sendTo(ws, { type: 'error', message: '다이한 플레이어는 승자로 지정할 수 없어요.' });
+        return;
+      }
       winner.balance += room.pot;
       room.pot = 0;
       room.pendingBet = 0;
       if (winner.balance > 0) winner.bankrupt = false;
 
-      // Collect next hand's ante from everyone who isn't bankrupt.
-      // This can newly bankrupt someone who can no longer afford it.
+      // New hand: clear everyone's fold status, then collect the ante from
+      // everyone who isn't bankrupt. This can newly bankrupt someone who
+      // can no longer afford it.
       for (const p of room.players) {
+        p.folded = false;
         if (!p.bankrupt) chargeAnte(room, p);
       }
 

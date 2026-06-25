@@ -116,6 +116,7 @@
   }
   .player-card.me{ border-color: rgba(201,162,39,0.5); box-shadow: 0 0 0 1px rgba(201,162,39,0.15) inset; }
   .player-card.bankrupt{ opacity: 0.45; }
+  .player-card.folded{ opacity: 0.55; }
   .player-card.its-turn{ border-color: var(--gold-soft); box-shadow: 0 0 0 1px rgba(201,162,39,0.3) inset, 0 0 16px rgba(201,162,39,0.15); }
   .player-top{ display:flex; align-items:center; justify-content:space-between; gap: 10px; }
   .player-id{ display:flex; align-items:center; gap:10px; min-width:0; flex-wrap:wrap; }
@@ -125,6 +126,7 @@
   .me-tag{ font-size:10px; color: var(--gold-soft); border:1px solid rgba(201,162,39,0.4); border-radius:999px; padding:1px 7px; margin-left:4px; vertical-align:1px; }
   .turn-tag{ font-size:10px; color: #2A1F00; background: var(--gold-soft); border-radius:999px; padding:1px 7px; margin-left:4px; vertical-align:1px; font-weight:800; }
   .bankrupt-tag{ font-size:10px; color: var(--chip-red); border:1px solid rgba(178,58,46,0.4); border-radius:999px; padding:1px 7px; margin-left:4px; vertical-align:1px; }
+  .fold-tag{ font-size:10px; color: var(--ink-dim); border:1px solid rgba(255,255,255,0.18); border-radius:999px; padding:1px 7px; margin-left:4px; vertical-align:1px; }
   .player-stack-row{ display:flex; align-items:flex-end; justify-content:space-between; margin-top: 10px; }
   .stack-amount{ font-size: 26px; color: var(--chip-white); }
 
@@ -146,6 +148,8 @@
 
   .confirm-row{ display:flex; gap:7px; margin-top:8px; }
   .confirm-row .btn{ flex:1; padding:10px; font-size:13px; }
+  .check-btn{ background: rgba(76,140,92,0.14) !important; border-color: rgba(76,140,92,0.4) !important; color: var(--success) !important; }
+  .fold-btn{ background: rgba(178,58,46,0.1) !important; border-color: rgba(178,58,46,0.3) !important; color: #E8A39A !important; }
 
   .winner-btn{
     margin-top: 10px; width:100%; padding:10px; font-size:13px;
@@ -184,6 +188,8 @@
     border: 1px solid transparent;
   }
   .winner-option:active{ border-color: var(--gold-soft); }
+  .winner-option.disabled{ opacity: 0.45; }
+  .winner-option.disabled:active{ border-color: transparent; }
   .winner-option .bal{ color: var(--ink-dim); font-family:"Courier New",monospace; font-size:13px; }
   .modal-close{ width:100%; margin-top: 14px; padding: 13px; }
 

@@ -77,11 +77,12 @@
         'player-card',
         isMe ? 'me' : '',
         p.bankrupt ? 'bankrupt' : '',
+        p.folded ? 'folded' : '',
         isTurn ? 'its-turn' : '',
       ].filter(Boolean).join(' ');
 
       let controlsHtml = '';
-      if(isMe && isTurn && !p.bankrupt){
+      if(isMe && isTurn && !p.bankrupt && !p.folded){
         const avail = p.balance - state.pendingBet;
         controlsHtml = `
         <div class="pending-row">
@@ -94,14 +95,24 @@
           <button class="bet-btn" data-action="stage" data-amt="1000" ${avail < 1000 ? 'disabled' : ''}>1000</button>
           <button class="bet-btn allin" data-action="allin" ${avail <= 0 ? 'disabled' : ''}>올인</button>
         </div>
+        ${state.pendingBet <= 0 ? `
         <div class="confirm-row">
-          <button class="btn btn-ghost" data-action="reset" ${state.pendingBet <= 0 ? 'disabled' : ''}>초기화</button>
-          <button class="btn btn-gold" data-action="confirm" ${state.pendingBet <= 0 ? 'disabled' : ''}>베팅 확정</button>
-        </div>`;
-      } else if(isMe && !isTurn && !p.bankrupt){
+          <button class="btn btn-ghost check-btn" data-action="check">체크</button>
+          <button class="btn btn-ghost fold-btn" data-action="fold">다이</button>
+        </div>` : `
+        <div class="confirm-row">
+          <button class="btn btn-ghost" data-action="reset">초기화</button>
+          <button class="btn btn-gold" data-action="confirm">베팅 확정</button>
+        </div>
+        <div class="confirm-row">
+          <button class="btn btn-ghost fold-btn" data-action="fold">다이</button>
+        </div>`}`;
+      } else if(isMe && !isTurn && !p.bankrupt && !p.folded){
         controlsHtml = p.balance <= 0
           ? `<div class="pending-row"><span>베팅할 토큰이 없어 자동으로 차례가 넘어가요</span></div>`
           : `<div class="pending-row"><span>내 차례를 기다리는 중...</span></div>`;
+      } else if(isMe && p.folded && !p.bankrupt){
+        controlsHtml = `<div class="pending-row"><span>이번 판은 다이했어요. 다음 판부터 다시 참여해요</span></div>`;
       }
 
       return `
@@ -111,7 +122,8 @@
             <div class="chip-stack">${chipSVG(colorForBalance(p.balance, state.buyIn))}</div>
             <span class="player-name">${escapeHtml(p.name)}</span>
             ${isMe ? '<span class="me-tag">나</span>' : ''}
-            ${isTurn && !p.bankrupt ? '<span class="turn-tag">차례</span>' : ''}
+            ${isTurn && !p.bankrupt && !p.folded ? '<span class="turn-tag">차례</span>' : ''}
+            ${p.folded && !p.bankrupt ? '<span class="fold-tag">다이</span>' : ''}
             ${p.bankrupt ? '<span class="bankrupt-tag">파산</span>' : ''}
           </div>
         </div>
@@ -225,6 +237,12 @@
   function confirmBet(){
     send({ type: 'confirm_bet' });
   }
+  function checkTurn(){
+    send({ type: 'check' });
+  }
+  function foldTurn(){
+    send({ type: 'fold' });
+  }
   function declareWinner(winnerId){
     send({ type: 'declare_winner', winnerId });
   }
@@ -238,8 +256,8 @@
         <h2>승자 지정</h2>
         <div class="sub">현재 팟 ${state.pot.toLocaleString()} 전액이 선택한 플레이어에게 지급되고, 다음 판은 그 사람부터 시작해요</div>
         ${state.players.map(p => `
-          <div class="winner-option" data-id="${p.id}">
-            <span>${escapeHtml(p.name)}${p.bankrupt ? ' (파산)' : ''}</span>
+          <div class="winner-option ${p.folded ? 'disabled' : ''}" data-id="${p.id}" data-folded="${!!p.folded}">
+            <span>${escapeHtml(p.name)}${p.bankrupt ? ' (파산)' : ''}${p.folded ? ' (다이)' : ''}</span>
             <span class="bal">${p.balance.toLocaleString()}</span>
           </div>
         `).join('')}
@@ -249,6 +267,10 @@
     overlay.addEventListener('click', (e) => { if(e.target === overlay) overlay.remove(); });
     $('closeWinnerModalBtn').onclick = () => overlay.remove();
     overlay.querySelectorAll('.winner-option').forEach(el => {
+      if(el.dataset.folded === 'true'){
+        el.addEventListener('click', () => showToast('다이한 플레이어는 승자로 지정할 수 없어요'));
+        return;
+      }
       el.addEventListener('click', () => {
         if(state.pot <= 0){ showToast('팟에 베팅된 토큰이 없어요'); overlay.remove(); return; }
         declareWinner(el.dataset.id);
@@ -270,6 +292,10 @@
       resetPending();
     } else if(action === 'confirm'){
       confirmBet();
+    } else if(action === 'check'){
+      checkTurn();
+    } else if(action === 'fold'){
+      foldTurn();
     }
   });
 
